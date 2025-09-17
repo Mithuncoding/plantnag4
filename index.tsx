@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.tsx';
+import './src/index.css';
 
 // The Gemini API key check is more robustly handled within geminiService.ts,
 // where it prevents API calls if the key is missing.
@@ -32,7 +33,6 @@ const injectGoogleMapsScript = () => {
   script.async = true;
   script.defer = true;
   script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,marker,routes,visualization&callback=initMap`;
-  script.setAttribute('loading', 'async');
   document.head.appendChild(script);
 };
 
