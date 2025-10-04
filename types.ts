@@ -111,3 +111,8 @@ export interface FertPestQuantitiesAIResponse {
   pesticides: FertPestQuantityItem[];
   error?: string;
 }
+
+export interface TranslationResponse {
+  translations: string[];
+  error?: string;
+}

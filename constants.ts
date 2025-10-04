@@ -145,9 +145,9 @@ export const MONTHS: string[] = [
   "July", "August", "September", "October", "November", "December"
 ];
 
-export const GEMINI_TEXT_MODEL = "gemini-2.5-flash-preview-04-17";
+export const GEMINI_TEXT_MODEL = "gemini-2.5-flash";
 // For tasks involving image input, the same model supports multimodal inputs.
-export const GEMINI_VISION_MODEL = "gemini-2.5-flash-preview-04-17";
+export const GEMINI_VISION_MODEL = "gemini-2.5-flash";
 
 export const OPENWEATHERMAP_API_URL = "https://api.openweathermap.org/data/2.5/weather";
 

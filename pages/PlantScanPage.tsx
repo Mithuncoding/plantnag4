@@ -11,7 +11,7 @@ import { MdMic, MdMicOff } from 'react-icons/md';
 import { PLANT_LIST } from '../constants';
 import { FaSearch } from 'react-icons/fa';
 import RelatedYouTubeVideo from '../components/RelatedYouTubeVideo';
-import { getCachedTranslation, isTextInExpectedScript } from '../utils/googleTranslate';
+// import { getCachedTranslation, isTextInExpectedScript } from '../utils/googleTranslate';
 
 // Add supported languages for translation (expanded)
 const TRANSLATE_LANGS = [
@@ -310,16 +310,16 @@ const PlantScanPage: React.FC = () => {
   const translateText = async (text: string, target: string) => {
     setIsTranslating(true);
     setTranslatedAnswer('');
-    setTranslatedScriptOk(true);
+    // setTranslatedScriptOk(true);
     try {
-      const { translated, scriptOk } = await getCachedTranslation(text, target);
-      setTranslatedAnswer(translated);
-      setTranslatedScriptOk(scriptOk);
-      if (!scriptOk) {
-        setError('Translation may not be in the correct script for this language. TTS is disabled. Try again or check your translation settings.');
-      } else {
-        setError(null);
-      }
+      // const { translated, scriptOk } = await getCachedTranslation(text, target);
+      setTranslatedAnswer("Translation is temporarily disabled.");
+      // setTranslatedScriptOk(scriptOk);
+      // if (!scriptOk) {
+      //   setError('Translation may not be in the correct script for this language. TTS is disabled. Try again or check your translation settings.');
+      // } else {
+      //   setError(null);
+      // }
     } catch (e) {
       setError('Translation failed.');
     }
