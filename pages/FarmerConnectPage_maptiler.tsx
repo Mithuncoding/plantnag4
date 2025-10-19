@@ -1,45 +1,32 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { MapSearchCategory } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Alert from '../components/Alert';
 import Card from '../components/Card';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+import * as maptilersdk from '@maptiler/sdk';
+import '@maptiler/sdk/dist/maptiler-sdk.css';
 
-// Fix for default marker icons in Leaflet
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-});
+const MAPTILER_API_KEY = 'dkITdiV302sFN88xOmK5';
 
 const initialSearchCategories: MapSearchCategory[] = [
-  { id: 'markets', translationKey: 'fcCategoryMarkets', defaultText: 'Markets', textQuery: 'market' },
+  { id: 'markets', translationKey: 'fcCategoryMarkets', defaultText: 'Markets', textQuery: 'agricultural market' },
   { id: 'fertilizers', translationKey: 'fcCategoryFertilizers', defaultText: 'Fertilizer Shops', textQuery: 'fertilizer shop' },
-  { id: 'nurseries', translationKey: 'fcCategoryNurseries', defaultText: 'Plant Nurseries', textQuery: 'nursery' },
+  { id: 'nurseries', translationKey: 'fcCategoryNurseries', defaultText: 'Plant Nurseries', textQuery: 'plant nursery' },
   { id: 'equipment', translationKey: 'fcCategoryEquipment', defaultText: 'Agri Equipment', textQuery: 'agricultural equipment' },
-  { id: 'veterinary', translationKey: 'fcCategoryVeterinary', defaultText: 'Veterinary Services', textQuery: 'veterinary' },
-  { id: 'hospital', translationKey: 'fcCategoryHospital', defaultText: 'Hospitals', textQuery: 'hospital' },
-  { id: 'pharmacy', translationKey: 'fcCategoryPharmacy', defaultText: 'Pharmacies', textQuery: 'pharmacy' },
-  { id: 'school', translationKey: 'fcCategorySchool', defaultText: 'Schools', textQuery: 'school' },
-  { id: 'bank', translationKey: 'fcCategoryBank', defaultText: 'Banks', textQuery: 'bank' },
+  { id: 'cold_storage', translationKey: 'fcCategoryColdStorage', defaultText: 'Cold Storage', textQuery: 'cold storage' },
+  { id: 'veterinary', translationKey: 'fcCategoryVeterinary', defaultText: 'Veterinary Services', textQuery: 'veterinary clinic' },
+  { id: 'agri_consultants', translationKey: 'fcCategoryAgriConsultants', defaultText: 'Agri Consultants', textQuery: 'agricultural consultant' },
+  { id: 'soil_testing', translationKey: 'fcCategorySoilTesting', defaultText: 'Soil Testing Labs', textQuery: 'soil testing laboratory' },
+  { id: 'warehousing', translationKey: 'fcCategoryWarehousing', defaultText: 'Warehousing', textQuery: 'warehouse' },
 ];
 
-const MAP_DEFAULT_ZOOM = 13;
-const MAP_DEFAULT_LOCATION = { lat: 12.9716, lng: 77.5946 }; // Bangalore
+const MAP_DEFAULT_ZOOM = 12;
+const MAP_DEFAULT_LOCATION = { lat: 13.3506, lng: 77.7256 };
 
 const categoryIcons: Record<string, string> = {
-  markets: '🛒',
-  fertilizers: '🧪',
-  nurseries: '🌱',
-  equipment: '🚜',
-  veterinary: '🐄',
-  hospital: '🏥',
-  pharmacy: '💊',
-  school: '🏫',
-  bank: '🏦',
+  markets: '🛒', fertilizers: '🧪', nurseries: '🌱', equipment: '🚜', cold_storage: '❄️',
+  veterinary: '🐄', agri_consultants: '👨‍🌾', soil_testing: '🧬', warehousing: '🏬',
 };
 
 interface SearchResult {
@@ -53,9 +40,9 @@ interface SearchResult {
 const FarmerConnectPage: React.FC = () => {
   const { translate } = useLanguage();
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<L.Map | null>(null);
-  const markersRef = useRef<L.Marker[]>([]);
-  const userMarkerRef = useRef<L.Marker | null>(null);
+  const map = useRef<maptilersdk.Map | null>(null);
+  const markersRef = useRef<maptilersdk.Marker[]>([]);
+  const userMarkerRef = useRef<maptilersdk.Marker | null>(null);
 
   const [currentLocation, setCurrentLocation] = useState<{lat: number, lng: number}>(MAP_DEFAULT_LOCATION);
   const [isLoading, setIsLoading] = useState(true);
@@ -64,11 +51,12 @@ const FarmerConnectPage: React.FC = () => {
   const [customSearchQuery, setCustomSearchQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
+  const [mapStyle, setMapStyle] = useState<string>('streets-v2');
 
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
+    maptilersdk.config.apiKey = MAPTILER_API_KEY;
 
-    // Get user location
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -78,7 +66,7 @@ const FarmerConnectPage: React.FC = () => {
         },
         (error) => {
           console.warn('Geolocation error:', error);
-          setError('Could not get your location. Using Bangalore as default.');
+          setError('Could not get your location. Using default location.');
           initializeMap(MAP_DEFAULT_LOCATION);
         }
       );
@@ -88,82 +76,77 @@ const FarmerConnectPage: React.FC = () => {
     }
   }, []);
 
-  const initializeMap = (location: {lat: number, lng: number}) => {
+  const initializeMap = useCallback((location: {lat: number, lng: number}) => {
     if (!mapContainer.current) return;
-
     try {
-      // Create map with OpenStreetMap (FREE!)
-      const mapInstance = L.map(mapContainer.current).setView([location.lat, location.lng], MAP_DEFAULT_ZOOM);
-
-      // Add OpenStreetMap tiles (NO API KEY NEEDED!)
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 19,
-      }).addTo(mapInstance);
-
-      map.current = mapInstance;
-
-      // Add user location marker
-      const userIcon = L.divIcon({
-        className: 'custom-div-icon',
-        html: '<div style="background-color: #3b82f6; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>',
-        iconSize: [20, 20],
-        iconAnchor: [10, 10],
+      const mapInstance = new maptilersdk.Map({
+        container: mapContainer.current,
+        style: `https://api.maptiler.com/maps/${mapStyle}/style.json?key=${MAPTILER_API_KEY}`,
+        center: [location.lng, location.lat],
+        zoom: MAP_DEFAULT_ZOOM,
       });
-
-      const userMarker = L.marker([location.lat, location.lng], { icon: userIcon })
-        .addTo(mapInstance)
-        .bindPopup('<b>You are here! 📍</b>');
-
+      map.current = mapInstance;
+      const el = document.createElement('div');
+      el.className = 'w-4 h-4 bg-blue-500 rounded-full border-2 border-white shadow-lg';
+      const userMarker = new maptilersdk.Marker({ element: el, anchor: 'center' })
+        .setLngLat([location.lng, location.lat])
+        .addTo(mapInstance);
       userMarkerRef.current = userMarker;
-      setIsLoading(false);
+      mapInstance.on('load', () => setIsLoading(false));
     } catch (err) {
       console.error('Map initialization error:', err);
       setError('Failed to initialize map');
       setIsLoading(false);
     }
-  };
+  }, [mapStyle]);
 
-  const clearMarkers = () => {
+  const clearMarkers = useCallback(() => {
     markersRef.current.forEach(marker => marker.remove());
     markersRef.current = [];
-  };
+  }, []);
 
-  const performSearch = async (query: string, categoryName: string) => {
+  const performSearch = useCallback(async (query: string, categoryName: string) => {
     if (!map.current) return;
-
     setLoadingSearch(true);
     setError(null);
     clearMarkers();
     setResults([]);
-
+    
     try {
-      // Use Nominatim API (FREE OpenStreetMap geocoding - NO API KEY!)
-      const searchUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&bounded=1&viewbox=${currentLocation.lng-0.5},${currentLocation.lat-0.5},${currentLocation.lng+0.5},${currentLocation.lat+0.5}&limit=20`;
+      // Get city/area name from current location for context
+      const reverseGeoUrl = `https://api.maptiler.com/geocoding/${currentLocation.lng},${currentLocation.lat}.json?key=${MAPTILER_API_KEY}`;
+      const reverseResponse = await fetch(reverseGeoUrl);
+      const reverseData = await reverseResponse.json();
       
-      const response = await fetch(searchUrl, {
-        headers: {
-          'User-Agent': 'PlantCareAI/1.0' // Required by Nominatim
-        }
-      });
-      
-      const data = await response.json();
+      let locationContext = 'Bangalore, Karnataka';
+      if (reverseData.features && reverseData.features.length > 0) {
+        const place = reverseData.features[0];
+        locationContext = place.context?.find((c: any) => c.id.includes('place'))?.text || 
+                         place.place_name.split(',')[0] || 
+                         'Bangalore';
+      }
 
-      if (data && data.length > 0) {
-        const searchResults: SearchResult[] = data
-          .filter((place: any) => {
-            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, parseFloat(place.lat), parseFloat(place.lon));
+      // Search for specific locations using the location context
+      const searchQuery = `${query} near ${locationContext}`;
+      const searchUrl = `https://api.maptiler.com/geocoding/${encodeURIComponent(searchQuery)}.json?key=${MAPTILER_API_KEY}&proximity=${currentLocation.lng},${currentLocation.lat}&limit=20&types=poi`;
+      
+      const response = await fetch(searchUrl);
+      const data = await response.json();
+      
+      if (data.features && data.features.length > 0) {
+        const searchResults: SearchResult[] = data.features
+          .filter((feature: any) => {
+            const coords = feature.geometry.coordinates;
+            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, coords[1], coords[0]);
             return distance <= 50; // Within 50km
           })
-          .map((place: any) => {
-            const lat = parseFloat(place.lat);
-            const lon = parseFloat(place.lon);
-            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, lat, lon);
-            
+          .map((feature: any) => {
+            const coords = feature.geometry.coordinates;
+            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, coords[1], coords[0]);
             return {
-              name: place.display_name.split(',')[0],
-              address: place.display_name,
-              coordinates: [lon, lat] as [number, number],
+              name: feature.text || feature.place_name.split(',')[0],
+              address: feature.place_name,
+              coordinates: coords,
               distance: `${distance.toFixed(2)} km`,
               category: categoryName
             };
@@ -172,41 +155,29 @@ const FarmerConnectPage: React.FC = () => {
           .slice(0, 10); // Top 10 closest
 
         if (searchResults.length === 0) {
-          setError(`No ${categoryName} found within 50km. Try a different area.`);
+          setError(`No ${categoryName} found within 50km. Try searching in a specific area.`);
         } else {
           setResults(searchResults);
-          
-          // Add markers
           searchResults.forEach((result, index) => {
-            const customIcon = L.divIcon({
-              className: 'custom-marker',
-              html: `<div style="background-color: #10b981; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3); cursor: pointer;">${index + 1}</div>`,
-              iconSize: [30, 30],
-              iconAnchor: [15, 15],
-            });
-
-            const marker = L.marker([result.coordinates[1], result.coordinates[0]], { icon: customIcon })
-              .addTo(map.current!)
-              .bindPopup(`
-                <div style="padding: 10px; min-width: 200px;">
-                  <h3 style="font-weight: bold; color: #16a34a; margin-bottom: 5px;">${result.name}</h3>
-                  <p style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">${result.address}</p>
-                  <p style="font-size: 12px; color: #2563eb; font-weight: 600;">📍 ${result.distance}</p>
-                </div>
-              `);
-
+            const el = document.createElement('div');
+            el.className = 'flex items-center justify-center w-8 h-8 bg-green-500 rounded-full border-2 border-white shadow-lg cursor-pointer hover:bg-green-600 transition-colors';
+            el.innerHTML = `<span class="text-white font-bold text-sm">${index + 1}</span>`;
+            const marker = new maptilersdk.Marker({ element: el, anchor: 'bottom' })
+              .setLngLat(result.coordinates)
+              .setPopup(new maptilersdk.Popup({ offset: 25 }).setHTML(
+                `<div class="p-2"><h3 class="font-bold text-green-700">${result.name}</h3><p class="text-sm text-gray-600 mt-1">${result.address}</p><p class="text-sm text-blue-600 mt-1">📍 ${result.distance}</p></div>`
+              ))
+              .addTo(map.current!);
             markersRef.current.push(marker);
           });
-
-          // Fit bounds to show all results
-          const bounds = L.latLngBounds([
-            [currentLocation.lat, currentLocation.lng],
-            ...searchResults.map(r => [r.coordinates[1], r.coordinates[0]] as [number, number])
-          ]);
-          map.current.fitBounds(bounds, { padding: [50, 50] });
+          
+          const bounds = new maptilersdk.LngLatBounds();
+          bounds.extend([currentLocation.lng, currentLocation.lat]);
+          searchResults.forEach(result => bounds.extend(result.coordinates));
+          map.current.fitBounds(bounds, { padding: 50 });
         }
       } else {
-        setError(`No results found for ${categoryName}. Try a different search.`);
+        setError(`No results found for ${categoryName}. Try custom search with specific location.`);
       }
     } catch (err: any) {
       console.error('Search error:', err);
@@ -214,37 +185,35 @@ const FarmerConnectPage: React.FC = () => {
     } finally {
       setLoadingSearch(false);
     }
-  };
+  }, [currentLocation, clearMarkers]);
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371; // Earth's radius in km
+    const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   };
 
   const handleCategoryClick = (category: MapSearchCategory) => {
     setSelectedCategory(category);
-    performSearch(
-      `${category.textQuery} near ${currentLocation.lat},${currentLocation.lng}`,
-      translate(category.translationKey, { default: category.defaultText })
-    );
+    performSearch(category.textQuery, translate(category.translationKey, { default: category.defaultText }));
   };
 
   const handleCustomSearch = () => {
-    if (customSearchQuery.trim()) {
-      performSearch(customSearchQuery, 'Custom Search');
+    if (customSearchQuery.trim()) performSearch(customSearchQuery, 'Custom Search');
+  };
+
+  const changeMapStyle = (style: string) => {
+    if (map.current) {
+      map.current.setStyle(`https://api.maptiler.com/maps/${style}/style.json?key=${MAPTILER_API_KEY}`);
+      setMapStyle(style);
     }
   };
 
   const panToResult = (result: SearchResult) => {
-    if (map.current) {
-      map.current.flyTo([result.coordinates[1], result.coordinates[0]], 15, { duration: 1.5 });
-    }
+    if (map.current) map.current.flyTo({ center: result.coordinates, zoom: 15, duration: 1500 });
   };
 
   return (
@@ -255,15 +224,35 @@ const FarmerConnectPage: React.FC = () => {
             <span className="text-5xl">🗺️</span>
             {translate('fcTitle', { default: 'Farmer Connect - Find Services' })}
           </h1>
-          <p className="text-lg opacity-90">
-            {translate('fcDescription', { default: 'Discover services near you - 100% FREE using OpenStreetMap!' })}
-          </p>
-          <p className="text-sm mt-2 bg-white/20 inline-block px-3 py-1 rounded-full">
-            ✨ No API keys • No costs • Open source mapping!
-          </p>
+          <p className="text-lg opacity-90">{translate('fcDescription', { default: 'Discover agricultural services near you - Powered by MapTiler!' })}</p>
         </Card>
 
-        {error && <Alert type="error" message={error} onClose={() => setError(null)} />}
+        {error && <Alert type="error" message={error} />}
+
+        <Card className="mb-4">
+          <h3 className="font-semibold text-green-700 mb-3">🎨 Map Style</h3>
+          <div className="flex gap-2 flex-wrap">
+            {[
+              { id: 'streets-v2', name: 'Streets' },
+              { id: 'satellite', name: 'Satellite' },
+              { id: 'hybrid', name: 'Hybrid' },
+              { id: 'topo-v2', name: 'Topographic' },
+              { id: 'outdoor-v2', name: 'Outdoor' },
+            ].map(style => (
+              <button
+                key={style.id}
+                onClick={() => changeMapStyle(style.id)}
+                className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                  mapStyle === style.id
+                    ? 'bg-green-600 text-white shadow-lg'
+                    : 'bg-white text-gray-700 hover:bg-green-50 border border-gray-300'
+                }`}
+              >
+                {style.name}
+              </button>
+            ))}
+          </div>
+        </Card>
 
         <Card className="mb-4">
           <h3 className="font-semibold text-green-700 mb-3 text-lg">
@@ -291,9 +280,7 @@ const FarmerConnectPage: React.FC = () => {
         </Card>
 
         <Card className="mb-4">
-          <h3 className="font-semibold text-green-700 mb-3">
-            {translate('fcCustomSearch', { default: 'Custom Search' })}
-          </h3>
+          <h3 className="font-semibold text-green-700 mb-3">{translate('fcCustomSearch', { default: 'Custom Search' })}</h3>
           <div className="flex gap-2">
             <input
               type="text"
@@ -319,7 +306,7 @@ const FarmerConnectPage: React.FC = () => {
               <div ref={mapContainer} className="w-full h-[500px] lg:h-[600px]">
                 {isLoading && (
                   <div className="flex items-center justify-center h-full bg-gray-100">
-                    <LoadingSpinner text="Loading FREE OpenStreetMap..." size="lg" />
+                    <LoadingSpinner text="Loading MapTiler..." size="lg" />
                   </div>
                 )}
               </div>
@@ -377,16 +364,14 @@ const FarmerConnectPage: React.FC = () => {
           <div className="flex items-start gap-4">
             <span className="text-4xl">ℹ️</span>
             <div>
-              <h3 className="font-bold text-blue-700 mb-2">
-                {translate('fcHowToUse', { default: 'How to Use' })}
-              </h3>
+              <h3 className="font-bold text-blue-700 mb-2">{translate('fcHowToUse', { default: 'How to Use' })}</h3>
               <ul className="text-sm text-gray-700 space-y-1">
                 <li>✅ Click on any category to find nearby services</li>
                 <li>✅ Use custom search for specific queries</li>
                 <li>✅ Click on map markers to see details</li>
                 <li>✅ Click on results to zoom to location</li>
-                <li>✅ <strong>Powered by OpenStreetMap - 100% FREE!</strong></li>
-                <li>✅ <strong>No API keys needed - Works forever!</strong></li>
+                <li>✅ Change map style (Satellite, Topographic, etc.)</li>
+                <li>✅ <strong>Powered by MapTiler - No Google Maps needed!</strong></li>
               </ul>
             </div>
           </div>
