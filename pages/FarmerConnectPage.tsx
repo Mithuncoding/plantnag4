@@ -64,63 +64,154 @@ const FarmerConnectPage: React.FC = () => {
   const [customSearchQuery, setCustomSearchQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
+  const [mapStyle, setMapStyle] = useState<'standard' | 'satellite'>('standard');
 
+  // Initialize map once
   useEffect(() => {
-    if (map.current || !mapContainer.current) return;
+    let isMounted = true;
 
-    // Get user location
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const userLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
-          setCurrentLocation(userLoc);
-          initializeMap(userLoc);
-        },
-        (error) => {
-          console.warn('Geolocation error:', error);
-          setError('Could not get your location. Using Bangalore as default.');
+    const setupMap = async () => {
+      // Clean up any existing map
+      if (map.current) {
+        map.current.remove();
+        map.current = null;
+      }
+
+      if (!mapContainer.current) return;
+
+      try {
+        // Get user location
+        if (navigator.geolocation && isMounted) {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              if (isMounted) {
+                const userLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
+                setCurrentLocation(userLoc);
+                initializeMap(userLoc);
+              }
+            },
+            (error) => {
+              console.warn('Geolocation error:', error);
+              if (isMounted) {
+                setError('Could not get your location. Using Bangalore as default.');
+                initializeMap(MAP_DEFAULT_LOCATION);
+              }
+            }
+          );
+        } else if (isMounted) {
+          setError('Geolocation not supported');
           initializeMap(MAP_DEFAULT_LOCATION);
         }
-      );
-    } else {
-      setError('Geolocation not supported');
-      initializeMap(MAP_DEFAULT_LOCATION);
-    }
+      } catch (err) {
+        console.error('Setup error:', err);
+        if (isMounted) {
+          setError('Failed to setup map');
+          setIsLoading(false);
+        }
+      }
+    };
+
+    setupMap();
+
+    // Cleanup on unmount
+    return () => {
+      isMounted = false;
+      if (map.current) {
+        map.current.remove();
+        map.current = null;
+      }
+    };
   }, []);
 
   const initializeMap = (location: {lat: number, lng: number}) => {
-    if (!mapContainer.current) return;
+    if (!mapContainer.current || map.current) return;
 
     try {
       // Create map with OpenStreetMap (FREE!)
-      const mapInstance = L.map(mapContainer.current).setView([location.lat, location.lng], MAP_DEFAULT_ZOOM);
+      const mapInstance = L.map(mapContainer.current, {
+        zoomControl: true,
+        attributionControl: true,
+      }).setView([location.lat, location.lng], MAP_DEFAULT_ZOOM);
 
-      // Add OpenStreetMap tiles (NO API KEY NEEDED!)
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      // Add tile layer based on style
+      const tileUrl = mapStyle === 'satellite' 
+        ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      
+      const attribution = mapStyle === 'satellite'
+        ? 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+      L.tileLayer(tileUrl, {
+        attribution: attribution,
         maxZoom: 19,
       }).addTo(mapInstance);
 
       map.current = mapInstance;
 
-      // Add user location marker
+      // Add user location marker with pulse animation
       const userIcon = L.divIcon({
-        className: 'custom-div-icon',
-        html: '<div style="background-color: #3b82f6; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>',
-        iconSize: [20, 20],
-        iconAnchor: [10, 10],
+        className: 'custom-user-marker',
+        html: `
+          <div style="position: relative;">
+            <div style="position: absolute; width: 40px; height: 40px; background-color: rgba(59, 130, 246, 0.3); border-radius: 50%; animation: pulse 2s infinite;"></div>
+            <div style="position: absolute; width: 20px; height: 20px; margin: 10px; background-color: #3b82f6; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>
+          </div>
+          <style>
+            @keyframes pulse {
+              0% { transform: scale(0.5); opacity: 1; }
+              100% { transform: scale(1.5); opacity: 0; }
+            }
+          </style>
+        `,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
       });
 
       const userMarker = L.marker([location.lat, location.lng], { icon: userIcon })
         .addTo(mapInstance)
-        .bindPopup('<b>You are here! 📍</b>');
+        .bindPopup('<div style="text-align: center; font-weight: bold;"><span style="font-size: 20px;">📍</span><br/>You are here!</div>');
 
       userMarkerRef.current = userMarker;
       setIsLoading(false);
     } catch (err) {
       console.error('Map initialization error:', err);
-      setError('Failed to initialize map');
+      setError('Failed to initialize map. Please refresh the page.');
       setIsLoading(false);
+    }
+  };
+
+  // Change map style
+  const changeMapStyle = (style: 'standard' | 'satellite') => {
+    setMapStyle(style);
+    if (map.current) {
+      // Remove old layer and add new one
+      map.current.eachLayer((layer) => {
+        if (layer instanceof L.TileLayer) {
+          map.current!.removeLayer(layer);
+        }
+      });
+
+      const tileUrl = style === 'satellite' 
+        ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      
+      const attribution = style === 'satellite'
+        ? 'Tiles &copy; Esri'
+        : '© OpenStreetMap contributors';
+
+      L.tileLayer(tileUrl, {
+        attribution: attribution,
+        maxZoom: 19,
+      }).addTo(map.current);
+
+      // Re-add user marker
+      if (userMarkerRef.current) {
+        userMarkerRef.current.addTo(map.current);
+      }
+
+      // Re-add search markers
+      markersRef.current.forEach(marker => marker.addTo(map.current!));
     }
   };
 
@@ -265,6 +356,37 @@ const FarmerConnectPage: React.FC = () => {
 
         {error && <Alert type="error" message={error} onClose={() => setError(null)} />}
 
+        {/* Map Style Selector */}
+        <Card className="mb-4">
+          <h3 className="font-semibold text-green-700 mb-3 flex items-center gap-2">
+            <span className="text-2xl">🎨</span> Map View
+          </h3>
+          <div className="flex gap-3">
+            <button
+              onClick={() => changeMapStyle('standard')}
+              className={`flex-1 px-4 py-3 rounded-xl font-semibold transition-all ${
+                mapStyle === 'standard'
+                  ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg transform scale-105'
+                  : 'bg-white text-gray-700 hover:bg-green-50 border-2 border-gray-300'
+              }`}
+            >
+              <div className="text-2xl mb-1">🗺️</div>
+              Street Map
+            </button>
+            <button
+              onClick={() => changeMapStyle('satellite')}
+              className={`flex-1 px-4 py-3 rounded-xl font-semibold transition-all ${
+                mapStyle === 'satellite'
+                  ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg transform scale-105'
+                  : 'bg-white text-gray-700 hover:bg-blue-50 border-2 border-gray-300'
+              }`}
+            >
+              <div className="text-2xl mb-1">🛰️</div>
+              Satellite View
+            </button>
+          </div>
+        </Card>
+
         <Card className="mb-4">
           <h3 className="font-semibold text-green-700 mb-3 text-lg">
             {translate('fcSearchCategories', { default: 'Search Categories' })}
@@ -291,35 +413,38 @@ const FarmerConnectPage: React.FC = () => {
         </Card>
 
         <Card className="mb-4">
-          <h3 className="font-semibold text-green-700 mb-3">
+          <h3 className="font-semibold text-green-700 mb-3 flex items-center gap-2">
+            <span className="text-2xl">🔍</span>
             {translate('fcCustomSearch', { default: 'Custom Search' })}
           </h3>
-          <div className="flex gap-2">
+          <div className="flex flex-col md:flex-row gap-3">
             <input
               type="text"
               value={customSearchQuery}
               onChange={(e) => setCustomSearchQuery(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleCustomSearch()}
-              placeholder={translate('fcSearchPlaceholder', { default: 'Search for any service...' })}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              placeholder={translate('fcSearchPlaceholder', { default: 'Search for any service... (e.g., hospital, market, school)' })}
+              className="flex-1 px-4 py-3 text-lg border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-4 focus:ring-green-500/50 focus:border-green-500"
             />
             <button
               onClick={handleCustomSearch}
               disabled={loadingSearch || !customSearchQuery.trim()}
-              className="px-6 py-2 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+              className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed disabled:shadow-none"
             >
-              {translate('fcSearch', { default: 'Search' })}
+              {loadingSearch ? '🔄 Searching...' : '🔍 Search'}
             </button>
           </div>
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
-            <Card className="p-0 overflow-hidden">
-              <div ref={mapContainer} className="w-full h-[500px] lg:h-[600px]">
+            <Card className="p-0 overflow-hidden shadow-2xl">
+              <div ref={mapContainer} className="w-full h-[500px] lg:h-[600px] relative">
                 {isLoading && (
-                  <div className="flex items-center justify-center h-full bg-gray-100">
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-green-50 to-emerald-50 z-10">
+                    <div className="text-6xl mb-4 animate-bounce">🗺️</div>
                     <LoadingSpinner text="Loading FREE OpenStreetMap..." size="lg" />
+                    <p className="text-sm text-gray-600 mt-4">Getting your location...</p>
                   </div>
                 )}
               </div>
@@ -345,49 +470,92 @@ const FarmerConnectPage: React.FC = () => {
                 </div>
               )}
 
-              <div className="space-y-3 max-h-[500px] overflow-y-auto">
+              <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
                 {results.map((result, index) => (
                   <div
                     key={index}
                     onClick={() => panToResult(result)}
-                    className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border border-green-200 hover:shadow-md transition-all cursor-pointer"
+                    className="group p-4 bg-gradient-to-r from-white to-green-50 rounded-xl border-2 border-green-200 hover:border-green-400 hover:shadow-xl transition-all cursor-pointer transform hover:-translate-y-1"
                   >
                     <div className="flex items-start gap-3">
-                      <span className="flex-shrink-0 w-8 h-8 bg-green-500 text-white rounded-full flex items-center justify-center font-bold">
+                      <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-600 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg group-hover:scale-110 transition-transform">
                         {index + 1}
-                      </span>
+                      </div>
                       <div className="flex-1">
-                        <h4 className="font-bold text-green-700">{result.name}</h4>
-                        <p className="text-sm text-gray-600 mt-1">{result.address}</p>
+                        <h4 className="font-bold text-green-700 text-lg group-hover:text-green-800">{result.name}</h4>
+                        <p className="text-sm text-gray-600 mt-1 line-clamp-2">{result.address}</p>
                         {result.distance && (
-                          <p className="text-sm text-blue-600 mt-2 font-medium">
-                            📍 {result.distance}
-                          </p>
+                          <div className="mt-2 flex items-center gap-2 flex-wrap">
+                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-bold flex items-center gap-1">
+                              <span>📍</span>
+                              {result.distance} away
+                            </span>
+                            {result.category && (
+                              <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
+                                {result.category}
+                              </span>
+                            )}
+                          </div>
                         )}
+                      </div>
+                      <div className="text-2xl opacity-0 group-hover:opacity-100 transition-opacity">
+                        🔍
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
+
+              {/* Custom CSS for scrollbar */}
+              <style>{`
+                .custom-scrollbar::-webkit-scrollbar {
+                  width: 8px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-track {
+                  background: #f1f1f1;
+                  border-radius: 10px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                  background: #10b981;
+                  border-radius: 10px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                  background: #059669;
+                }
+              `}</style>
             </Card>
           </div>
         </div>
 
-        <Card className="mt-6 bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200">
+        <Card className="mt-6 bg-gradient-to-r from-blue-50 via-cyan-50 to-teal-50 border-2 border-blue-200 shadow-xl">
           <div className="flex items-start gap-4">
-            <span className="text-4xl">ℹ️</span>
-            <div>
-              <h3 className="font-bold text-blue-700 mb-2">
-                {translate('fcHowToUse', { default: 'How to Use' })}
+            <span className="text-5xl">💡</span>
+            <div className="flex-1">
+              <h3 className="font-bold text-blue-700 mb-3 text-xl">
+                {translate('fcHowToUse', { default: 'How to Use Farmer Connect' })}
               </h3>
-              <ul className="text-sm text-gray-700 space-y-1">
-                <li>✅ Click on any category to find nearby services</li>
-                <li>✅ Use custom search for specific queries</li>
-                <li>✅ Click on map markers to see details</li>
-                <li>✅ Click on results to zoom to location</li>
-                <li>✅ <strong>Powered by OpenStreetMap - 100% FREE!</strong></li>
-                <li>✅ <strong>No API keys needed - Works forever!</strong></li>
-              </ul>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <h4 className="font-semibold text-blue-600 mb-2">🎯 Features:</h4>
+                  <ul className="text-sm text-gray-700 space-y-1">
+                    <li>✅ Click categories to find services instantly</li>
+                    <li>✅ Use custom search for specific places</li>
+                    <li>✅ Toggle between Street & Satellite view</li>
+                    <li>✅ Click markers or results to zoom in</li>
+                    <li>✅ See distance from your location</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4 className="font-semibold text-green-600 mb-2">🌟 Why It's Great:</h4>
+                  <ul className="text-sm text-gray-700 space-y-1">
+                    <li>💰 <strong>100% FREE Forever!</strong></li>
+                    <li>🔓 No API keys or limits</li>
+                    <li>🗺️ Powered by OpenStreetMap community</li>
+                    <li>🌍 Global coverage, local data</li>
+                    <li>🚀 Fast, reliable, open source</li>
+                  </ul>
+                </div>
+              </div>
             </div>
           </div>
         </Card>
