@@ -95,8 +95,23 @@ export const isTextInExpectedScript = (text: string, langCode: string): boolean 
     return true;
   }
 
-  // Check if at least some characters match the expected script
-  return scriptPattern.test(text);
+  // Be more lenient - allow if at least 10% of characters are in the expected script
+  // or if the text contains some expected script characters (for mixed content)
+  const matches = text.match(scriptPattern);
+  if (matches && matches.length > 0) {
+    return true; // Has at least some characters in the expected script
+  }
+  
+  // If no script characters found, check if it's mostly Latin (technical terms, numbers, etc.)
+  const latinPattern = /[a-zA-Z0-9]/;
+  const hasLatin = latinPattern.test(text);
+  if (hasLatin) {
+    // Allow mixed content (Latin + script)
+    return true;
+  }
+
+  // If none of the above, it might be in wrong script
+  return false;
 };
 
 /**

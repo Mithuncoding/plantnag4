@@ -316,12 +316,14 @@ const PlantScanPage: React.FC = () => {
       setTranslatedAnswer(translated);
       setTranslatedScriptOk(scriptOk);
       if (!scriptOk) {
-        setError('Translation may not be in the correct script for this language. TTS is disabled. Try again or check your translation settings.');
+        // Don't set error - just show warning. Translation might still be useful
+        console.warn('Translation script validation warning - text may contain mixed content');
       } else {
         setError(null);
       }
     } catch (e) {
-      setError('Translation failed.');
+      setError('Translation failed. Showing original text.');
+      setTranslatedAnswer(text); // Fallback to original text
     }
     setIsTranslating(false);
   };

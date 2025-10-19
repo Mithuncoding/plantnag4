@@ -111,47 +111,77 @@ const FarmerConnectPage: React.FC = () => {
     setError(null);
     clearMarkers();
     setResults([]);
+    
     try {
-      const searchUrl = `https://api.maptiler.com/geocoding/${encodeURIComponent(query)}.json?key=${MAPTILER_API_KEY}&proximity=${currentLocation.lng},${currentLocation.lat}&limit=20`;
+      // Get city/area name from current location for context
+      const reverseGeoUrl = `https://api.maptiler.com/geocoding/${currentLocation.lng},${currentLocation.lat}.json?key=${MAPTILER_API_KEY}`;
+      const reverseResponse = await fetch(reverseGeoUrl);
+      const reverseData = await reverseResponse.json();
+      
+      let locationContext = 'Bangalore, Karnataka';
+      if (reverseData.features && reverseData.features.length > 0) {
+        const place = reverseData.features[0];
+        locationContext = place.context?.find((c: any) => c.id.includes('place'))?.text || 
+                         place.place_name.split(',')[0] || 
+                         'Bangalore';
+      }
+
+      // Search for specific locations using the location context
+      const searchQuery = `${query} near ${locationContext}`;
+      const searchUrl = `https://api.maptiler.com/geocoding/${encodeURIComponent(searchQuery)}.json?key=${MAPTILER_API_KEY}&proximity=${currentLocation.lng},${currentLocation.lat}&limit=20&types=poi`;
+      
       const response = await fetch(searchUrl);
       const data = await response.json();
+      
       if (data.features && data.features.length > 0) {
-        const searchResults: SearchResult[] = data.features.map((feature: any) => {
-          const coords = feature.geometry.coordinates;
-          const distance = calculateDistance(currentLocation.lat, currentLocation.lng, coords[1], coords[0]);
-          return {
-            name: feature.text || feature.place_name,
-            address: feature.place_name,
-            coordinates: coords,
-            distance: `${distance.toFixed(2)} km`,
-            category: categoryName
-          };
-        });
-        setResults(searchResults);
-        searchResults.forEach((result, index) => {
-          const el = document.createElement('div');
-          el.className = 'flex items-center justify-center w-8 h-8 bg-green-500 rounded-full border-2 border-white shadow-lg cursor-pointer hover:bg-green-600 transition-colors';
-          el.innerHTML = `<span class="text-white font-bold text-sm">${index + 1}</span>`;
-          const marker = new maptilersdk.Marker({ element: el, anchor: 'bottom' })
-            .setLngLat(result.coordinates)
-            .setPopup(new maptilersdk.Popup({ offset: 25 }).setHTML(
-              `<div class="p-2"><h3 class="font-bold text-green-700">${result.name}</h3><p class="text-sm text-gray-600 mt-1">${result.address}</p><p class="text-sm text-blue-600 mt-1">📍 ${result.distance}</p></div>`
-            ))
-            .addTo(map.current!);
-          markersRef.current.push(marker);
-        });
-        if (searchResults.length > 0) {
+        const searchResults: SearchResult[] = data.features
+          .filter((feature: any) => {
+            const coords = feature.geometry.coordinates;
+            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, coords[1], coords[0]);
+            return distance <= 50; // Within 50km
+          })
+          .map((feature: any) => {
+            const coords = feature.geometry.coordinates;
+            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, coords[1], coords[0]);
+            return {
+              name: feature.text || feature.place_name.split(',')[0],
+              address: feature.place_name,
+              coordinates: coords,
+              distance: `${distance.toFixed(2)} km`,
+              category: categoryName
+            };
+          })
+          .sort((a: SearchResult, b: SearchResult) => parseFloat(a.distance!) - parseFloat(b.distance!))
+          .slice(0, 10); // Top 10 closest
+
+        if (searchResults.length === 0) {
+          setError(`No ${categoryName} found within 50km. Try searching in a specific area.`);
+        } else {
+          setResults(searchResults);
+          searchResults.forEach((result, index) => {
+            const el = document.createElement('div');
+            el.className = 'flex items-center justify-center w-8 h-8 bg-green-500 rounded-full border-2 border-white shadow-lg cursor-pointer hover:bg-green-600 transition-colors';
+            el.innerHTML = `<span class="text-white font-bold text-sm">${index + 1}</span>`;
+            const marker = new maptilersdk.Marker({ element: el, anchor: 'bottom' })
+              .setLngLat(result.coordinates)
+              .setPopup(new maptilersdk.Popup({ offset: 25 }).setHTML(
+                `<div class="p-2"><h3 class="font-bold text-green-700">${result.name}</h3><p class="text-sm text-gray-600 mt-1">${result.address}</p><p class="text-sm text-blue-600 mt-1">📍 ${result.distance}</p></div>`
+              ))
+              .addTo(map.current!);
+            markersRef.current.push(marker);
+          });
+          
           const bounds = new maptilersdk.LngLatBounds();
           bounds.extend([currentLocation.lng, currentLocation.lat]);
           searchResults.forEach(result => bounds.extend(result.coordinates));
           map.current.fitBounds(bounds, { padding: 50 });
         }
       } else {
-        setError(`No results found for ${categoryName}`);
+        setError(`No results found for ${categoryName}. Try custom search with specific location.`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Search error:', err);
-      setError('Search failed. Please try again.');
+      setError(`Search failed: ${err.message || 'Please try again'}`);
     } finally {
       setLoadingSearch(false);
     }
