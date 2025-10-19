@@ -16,10 +16,10 @@ L.Icon.Default.mergeOptions({
 });
 
 const initialSearchCategories: MapSearchCategory[] = [
-  { id: 'markets', translationKey: 'fcCategoryMarkets', defaultText: 'Markets', textQuery: 'market' },
-  { id: 'fertilizers', translationKey: 'fcCategoryFertilizers', defaultText: 'Fertilizer Shops', textQuery: 'fertilizer shop' },
-  { id: 'nurseries', translationKey: 'fcCategoryNurseries', defaultText: 'Plant Nurseries', textQuery: 'nursery' },
-  { id: 'equipment', translationKey: 'fcCategoryEquipment', defaultText: 'Agri Equipment', textQuery: 'agricultural equipment' },
+  { id: 'markets', translationKey: 'fcCategoryMarkets', defaultText: 'Markets', textQuery: 'marketplace' },
+  { id: 'fertilizers', translationKey: 'fcCategoryFertilizers', defaultText: 'Fertilizer Shops', textQuery: 'doityourself' },
+  { id: 'nurseries', translationKey: 'fcCategoryNurseries', defaultText: 'Plant Nurseries', textQuery: 'garden_centre' },
+  { id: 'equipment', translationKey: 'fcCategoryEquipment', defaultText: 'Agri Equipment', textQuery: 'hardware' },
   { id: 'veterinary', translationKey: 'fcCategoryVeterinary', defaultText: 'Veterinary Services', textQuery: 'veterinary' },
   { id: 'hospital', translationKey: 'fcCategoryHospital', defaultText: 'Hospitals', textQuery: 'hospital' },
   { id: 'pharmacy', translationKey: 'fcCategoryPharmacy', defaultText: 'Pharmacies', textQuery: 'pharmacy' },
@@ -229,41 +229,89 @@ const FarmerConnectPage: React.FC = () => {
     setResults([]);
 
     try {
-      // Use Nominatim API (FREE OpenStreetMap geocoding - NO API KEY!)
-      const searchUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&bounded=1&viewbox=${currentLocation.lng-0.5},${currentLocation.lat-0.5},${currentLocation.lng+0.5},${currentLocation.lat+0.5}&limit=20`;
-      
-      const response = await fetch(searchUrl, {
-        headers: {
-          'User-Agent': 'PlantCareAI/1.0' // Required by Nominatim
-        }
-      });
-      
-      const data = await response.json();
+      // Use Overpass API for better POI search (FREE OpenStreetMap data!)
+      // This searches for actual places/amenities in the area
+      const radius = 10000; // 10km radius
+      const overpassQuery = `
+        [out:json][timeout:25];
+        (
+          node["shop"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
+          node["amenity"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
+          node["name"~"${query}",i](around:${radius},${currentLocation.lat},${currentLocation.lng});
+          way["shop"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
+          way["amenity"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
+        );
+        out center;
+      `;
 
-      if (data && data.length > 0) {
-        const searchResults: SearchResult[] = data
-          .filter((place: any) => {
-            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, parseFloat(place.lat), parseFloat(place.lon));
+      const overpassUrl = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
+      
+      let response = await fetch(overpassUrl);
+      let data = await response.json();
+
+      // If Overpass fails or returns no results, fallback to Nominatim
+      if (!data.elements || data.elements.length === 0) {
+        console.log('Overpass found nothing, trying Nominatim...');
+        const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&bounded=1&viewbox=${currentLocation.lng-0.5},${currentLocation.lat-0.5},${currentLocation.lng+0.5},${currentLocation.lat+0.5}&limit=20`;
+        
+        response = await fetch(nominatimUrl, {
+          headers: {
+            'User-Agent': 'PlantCareAI/1.0'
+          }
+        });
+        
+        data = await response.json();
+        
+        // Convert Nominatim format to Overpass-like format
+        if (data && data.length > 0) {
+          data = {
+            elements: data.map((place: any) => ({
+              type: 'node',
+              id: place.place_id,
+              lat: parseFloat(place.lat),
+              lon: parseFloat(place.lon),
+              tags: {
+                name: place.display_name.split(',')[0],
+                full_address: place.display_name
+              }
+            }))
+          };
+        }
+      }
+
+      if (data.elements && data.elements.length > 0) {
+        const searchResults: SearchResult[] = data.elements
+          .filter((element: any) => {
+            const lat = element.lat || (element.center && element.center.lat);
+            const lon = element.lon || (element.center && element.center.lon);
+            if (!lat || !lon) return false;
+            
+            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, lat, lon);
             return distance <= 50; // Within 50km
           })
-          .map((place: any) => {
-            const lat = parseFloat(place.lat);
-            const lon = parseFloat(place.lon);
+          .map((element: any) => {
+            const lat = element.lat || (element.center && element.center.lat);
+            const lon = element.lon || (element.center && element.center.lon);
             const distance = calculateDistance(currentLocation.lat, currentLocation.lng, lat, lon);
             
+            const name = element.tags?.name || element.tags?.full_address?.split(',')[0] || `${categoryName} Location`;
+            const address = element.tags?.full_address || 
+                          [element.tags?.['addr:street'], element.tags?.['addr:city']].filter(Boolean).join(', ') ||
+                          `Lat: ${lat.toFixed(4)}, Lon: ${lon.toFixed(4)}`;
+            
             return {
-              name: place.display_name.split(',')[0],
-              address: place.display_name,
+              name: name,
+              address: address,
               coordinates: [lon, lat] as [number, number],
               distance: `${distance.toFixed(2)} km`,
               category: categoryName
             };
           })
           .sort((a: SearchResult, b: SearchResult) => parseFloat(a.distance!) - parseFloat(b.distance!))
-          .slice(0, 10); // Top 10 closest
+          .slice(0, 15); // Top 15 closest
 
         if (searchResults.length === 0) {
-          setError(`No ${categoryName} found within 50km. Try a different area.`);
+          setError(`No ${categoryName} found within 50km. Try searching in a bigger city or different area.`);
         } else {
           setResults(searchResults);
           
@@ -297,7 +345,7 @@ const FarmerConnectPage: React.FC = () => {
           map.current.fitBounds(bounds, { padding: [50, 50] });
         }
       } else {
-        setError(`No results found for ${categoryName}. Try a different search.`);
+        setError(`No results found for ${categoryName}. Try:\n• Using custom search with city name (e.g., "nursery Bangalore")\n• Searching in a different area\n• Trying a different category`);
       }
     } catch (err: any) {
       console.error('Search error:', err);
@@ -320,8 +368,9 @@ const FarmerConnectPage: React.FC = () => {
 
   const handleCategoryClick = (category: MapSearchCategory) => {
     setSelectedCategory(category);
+    // Use the category query directly for Overpass API
     performSearch(
-      `${category.textQuery} near ${currentLocation.lat},${currentLocation.lng}`,
+      category.textQuery,
       translate(category.translationKey, { default: category.defaultText })
     );
   };
