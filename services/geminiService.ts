@@ -2,7 +2,7 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { GEMINI_TEXT_MODEL, GEMINI_VISION_MODEL } from '../constants';
 import { PlantDiagnosis, ImagePart, EncyclopediaEntry, CropInsight, FarmingAdvice, FertPestQuantitiesAIResponse, WeatherData } from '../types';
 
-const API_KEY = process.env.GEMINI_API_KEY || '';
+const API_KEY = 'AIzaSyBaPW9f5Xpy3fh8YODCMQKQbNW99jKNjFQ';
 
 if (!API_KEY) {
   console.error("Gemini API Key (process.env.API_KEY) is not set. AI features will not work.");
