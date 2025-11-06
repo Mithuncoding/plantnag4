@@ -12,7 +12,8 @@ import EncyclopediaPage from './pages/EncyclopediaPage.tsx';
 import CropInsightsPage from './pages/CropInsightsPage.tsx';
 import ScanHistoryPage from './pages/ScanHistoryPage.tsx';
 import CommunityHubPage from './pages/CommunityHubPage.tsx';
-import FarmerConnectPage from './pages/FarmerConnectPage.tsx'; // New Page
+import FarmerConnectPage from './pages/FarmerConnectPage.tsx';
+import ARPlantScanPage from './pages/ARPlantScanPage.tsx'; // AR Disease Detection
 
 const App: React.FC = () => {
   return (
@@ -23,6 +24,7 @@ const App: React.FC = () => {
             <Routes>
               <Route path="/" element={<LandingPage />} />
               <Route path="/scan" element={<PlantScanPage />} />
+              <Route path="/ar-scan" element={<ARPlantScanPage />} /> {/* AR Disease Detection */}
               <Route path="/encyclopedia" element={<EncyclopediaPage />} />
               <Route path="/crop-insights" element={<CropInsightsPage />} />
               <Route path="/history" element={<ScanHistoryPage />} />

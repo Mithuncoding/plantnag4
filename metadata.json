@@ -1,6 +1,6 @@
 {
-  "name": "Copy of PlantCare AI",
-  "description": "An advanced AI-powered plant care assistant. Upload plant photos for health diagnosis, browse a plant encyclopedia, get crop insights for Karnataka, receive weather-based farming advice, track your scan history, and share your plants in the GreenGram community hub. All powered by Gemini API.",
+  "name": "GrowSmart",
+  "description": "An advanced AI-powered agricultural assistant created by Mithun & Manoj. Upload plant photos for health diagnosis, browse a plant encyclopedia, get crop insights for Karnataka, receive weather-based farming advice, track your scan history, and connect with nearby agricultural services. All powered by Gemini AI and Google Maps.",
   "requestFramePermissions": [
     "camera",
     "geolocation"

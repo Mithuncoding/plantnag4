@@ -15,7 +15,7 @@ const getSearchQuery = (plantName: string, diseaseName?: string) => {
   if (plantName.toLowerCase().includes('coconut')) {
     return [
       'coconut tree care India',
-      'coconut plant care Hindi',
+      'coconut plant care Kannada',
       'coconut plant care English',
       'coconut tree care Malayalam',
       'coconut tree care Tamil',
@@ -28,9 +28,9 @@ const getSearchQuery = (plantName: string, diseaseName?: string) => {
     return [`${plantName} ${diseaseName} care`];
   }
   if (plantName) {
-    return [`${plantName} plant care India`, `${plantName} plant care Hindi`, `${plantName} plant care English`, `${plantName} plant care`];
+    return [`${plantName} plant care India`, `${plantName} plant care Kannada`, `${plantName} plant care English`, `${plantName} plant care`];
   }
-  return ['plant care tips India', 'plant care tips Hindi', 'plant care tips English', 'plant care tips'];
+  return ['plant care tips India', 'plant care tips Kannada', 'plant care tips English', 'plant care tips'];
 };
 
 const fetchYouTubeApiVideo = async (query: string, apiKey: string) => {

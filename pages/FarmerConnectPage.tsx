@@ -1,614 +1,490 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
-import { MapSearchCategory } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Alert from '../components/Alert';
 import Card from '../components/Card';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 
-// Fix for default marker icons in Leaflet
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-});
+// Google Maps API Key
+const GOOGLE_MAPS_API_KEY = 'AIzaSyD5ZG9hqKY1-pqN_T4_B3X_f11MFeghLUI';
 
-const initialSearchCategories: MapSearchCategory[] = [
-  { id: 'markets', translationKey: 'fcCategoryMarkets', defaultText: 'Markets', textQuery: 'marketplace' },
-  { id: 'fertilizers', translationKey: 'fcCategoryFertilizers', defaultText: 'Fertilizer Shops', textQuery: 'doityourself' },
-  { id: 'nurseries', translationKey: 'fcCategoryNurseries', defaultText: 'Plant Nurseries', textQuery: 'garden_centre' },
-  { id: 'equipment', translationKey: 'fcCategoryEquipment', defaultText: 'Agri Equipment', textQuery: 'hardware' },
-  { id: 'veterinary', translationKey: 'fcCategoryVeterinary', defaultText: 'Veterinary Services', textQuery: 'veterinary' },
-  { id: 'hospital', translationKey: 'fcCategoryHospital', defaultText: 'Hospitals', textQuery: 'hospital' },
-  { id: 'pharmacy', translationKey: 'fcCategoryPharmacy', defaultText: 'Pharmacies', textQuery: 'pharmacy' },
-  { id: 'school', translationKey: 'fcCategorySchool', defaultText: 'Schools', textQuery: 'school' },
-  { id: 'bank', translationKey: 'fcCategoryBank', defaultText: 'Banks', textQuery: 'bank' },
+// Search categories for agricultural services
+const searchCategories = [
+  { id: 'markets', icon: '🛒', query: 'agricultural market farmers market produce market' },
+  { id: 'fertilizers', icon: '🧪', query: 'fertilizer shop agricultural supplies pesticide shop' },
+  { id: 'nurseries', icon: '🌱', query: 'plant nursery garden center' },
+  { id: 'equipment', icon: '🚜', query: 'agricultural equipment tractor dealer farm machinery' },
+  { id: 'cold_storage', icon: '❄️', query: 'cold storage refrigerated warehouse' },
+  { id: 'veterinary', icon: '🐄', query: 'veterinary clinic animal hospital' },
+  { id: 'agri_consultants', icon: '👨‍🌾', query: 'agricultural consultant farm advisor' },
+  { id: 'soil_testing', icon: '🧬', query: 'soil testing laboratory' },
+  { id: 'warehousing', icon: '🏬', query: 'warehouse storage facility' },
 ];
 
-const MAP_DEFAULT_ZOOM = 13;
-const MAP_DEFAULT_LOCATION = { lat: 12.9716, lng: 77.5946 }; // Bangalore
-
-const categoryIcons: Record<string, string> = {
-  markets: '🛒',
-  fertilizers: '🧪',
-  nurseries: '🌱',
-  equipment: '🚜',
-  veterinary: '🐄',
-  hospital: '🏥',
-  pharmacy: '💊',
-  school: '🏫',
-  bank: '🏦',
+const MAP_CONFIG = {
+  defaultZoom: 13,
+  searchRadius: 10000, // 10km
+  defaultLocation: { lat: 12.9716, lng: 77.5946 }, // Bangalore
 };
 
-interface SearchResult {
+interface PlaceResult {
+  place_id: string;
   name: string;
-  address: string;
-  coordinates: [number, number];
-  distance?: string;
-  category?: string;
+  formatted_address?: string;
+  geometry?: {
+    location: google.maps.LatLng;
+  };
+  rating?: number;
+  user_ratings_total?: number;
+  opening_hours?: {
+    open_now?: boolean;
+  };
 }
 
 const FarmerConnectPage: React.FC = () => {
-  const { translate } = useLanguage();
-  const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<L.Map | null>(null);
-  const markersRef = useRef<L.Marker[]>([]);
-  const userMarkerRef = useRef<L.Marker | null>(null);
+  const { translate, language } = useLanguage();
+  const mapRef = useRef<HTMLDivElement>(null);
+  const googleMapRef = useRef<google.maps.Map | null>(null);
+  const markersRef = useRef<google.maps.Marker[]>([]);
+  const userMarkerRef = useRef<google.maps.Marker | null>(null);
+  const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
+  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
-  const [currentLocation, setCurrentLocation] = useState<{lat: number, lng: number}>(MAP_DEFAULT_LOCATION);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedCategory, setSelectedCategory] = useState<MapSearchCategory | null>(null);
-  const [customSearchQuery, setCustomSearchQuery] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [loadingSearch, setLoadingSearch] = useState(false);
-  const [mapStyle, setMapStyle] = useState<'standard' | 'satellite'>('standard');
+  const [currentLocation, setCurrentLocation] = useState(MAP_CONFIG.defaultLocation);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [customSearch, setCustomSearch] = useState('');
+  const [results, setResults] = useState<PlaceResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
 
-  // Initialize map once
-  useEffect(() => {
-    let isMounted = true;
-
-    const setupMap = async () => {
-      // Clean up any existing map
-      if (map.current) {
-        map.current.remove();
-        map.current = null;
+  // Load Google Maps Script
+  const loadGoogleMapsScript = useCallback(() => {
+    return new Promise<void>((resolve, reject) => {
+      if (window.google && window.google.maps) {
+        resolve();
+        return;
       }
 
-      if (!mapContainer.current) return;
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places&language=${language === 'kn' ? 'kn' : 'en'}`;
+      script.async = true;
+      script.defer = true;
+      script.onload = () => {
+        setMapLoaded(true);
+        resolve();
+      };
+      script.onerror = () => reject(new Error('Failed to load Google Maps'));
+      document.head.appendChild(script);
+    });
+  }, [language]);
 
-      try {
-        // Get user location
-        if (navigator.geolocation && isMounted) {
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              if (isMounted) {
-                const userLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
-                setCurrentLocation(userLoc);
-                initializeMap(userLoc);
-              }
-            },
-            (error) => {
-              console.warn('Geolocation error:', error);
-              if (isMounted) {
-                setError('Could not get your location. Using Bangalore as default.');
-                initializeMap(MAP_DEFAULT_LOCATION);
-              }
-            }
-          );
-        } else if (isMounted) {
-          setError('Geolocation not supported');
-          initializeMap(MAP_DEFAULT_LOCATION);
-        }
-      } catch (err) {
-        console.error('Setup error:', err);
-        if (isMounted) {
-          setError('Failed to setup map');
-          setIsLoading(false);
-        }
-      }
-    };
-
-    setupMap();
-
-    // Cleanup on unmount
-    return () => {
-      isMounted = false;
-      if (map.current) {
-        map.current.remove();
-        map.current = null;
-      }
-    };
-  }, []);
-
-  const initializeMap = (location: {lat: number, lng: number}) => {
-    if (!mapContainer.current || map.current) return;
+  // Initialize map
+  const initializeMap = useCallback(async (location: { lat: number; lng: number }) => {
+    if (!mapRef.current || !window.google?.maps) return;
 
     try {
-      // Create map with OpenStreetMap (FREE!)
-      const mapInstance = L.map(mapContainer.current, {
+      const map = new google.maps.Map(mapRef.current, {
+        center: location,
+        zoom: MAP_CONFIG.defaultZoom,
+        mapTypeControl: true,
+        streetViewControl: true,
+        fullscreenControl: true,
         zoomControl: true,
-        attributionControl: true,
-      }).setView([location.lat, location.lng], MAP_DEFAULT_ZOOM);
-
-      // Add tile layer based on style
-      const tileUrl = mapStyle === 'satellite' 
-        ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-        : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-      
-      const attribution = mapStyle === 'satellite'
-        ? 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-        : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
-
-      L.tileLayer(tileUrl, {
-        attribution: attribution,
-        maxZoom: 19,
-      }).addTo(mapInstance);
-
-      map.current = mapInstance;
-
-      // Add user location marker with pulse animation
-      const userIcon = L.divIcon({
-        className: 'custom-user-marker',
-        html: `
-          <div style="position: relative;">
-            <div style="position: absolute; width: 40px; height: 40px; background-color: rgba(59, 130, 246, 0.3); border-radius: 50%; animation: pulse 2s infinite;"></div>
-            <div style="position: absolute; width: 20px; height: 20px; margin: 10px; background-color: #3b82f6; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>
-          </div>
-          <style>
-            @keyframes pulse {
-              0% { transform: scale(0.5); opacity: 1; }
-              100% { transform: scale(1.5); opacity: 0; }
-            }
-          </style>
-        `,
-        iconSize: [40, 40],
-        iconAnchor: [20, 20],
+        styles: [
+          {
+            featureType: 'poi',
+            elementType: 'labels',
+            stylers: [{ visibility: 'off' }],
+          },
+        ],
       });
 
-      const userMarker = L.marker([location.lat, location.lng], { icon: userIcon })
-        .addTo(mapInstance)
-        .bindPopup('<div style="text-align: center; font-weight: bold;"><span style="font-size: 20px;">📍</span><br/>You are here!</div>');
+      googleMapRef.current = map;
+
+      // Create user marker
+      const userMarker = new google.maps.Marker({
+        position: location,
+        map: map,
+        title: translate('yourLocation'),
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          fillColor: '#4285F4',
+          fillOpacity: 1,
+          strokeColor: '#FFFFFF',
+          strokeWeight: 3,
+          scale: 10,
+        },
+        animation: google.maps.Animation.DROP,
+      });
 
       userMarkerRef.current = userMarker;
+
+      // Initialize directions renderer
+      directionsRendererRef.current = new google.maps.DirectionsRenderer({
+        map: map,
+        suppressMarkers: false,
+        polylineOptions: {
+          strokeColor: '#10B981',
+          strokeWeight: 6,
+          strokeOpacity: 0.8,
+        },
+      });
+
+      // Initialize info window
+      infoWindowRef.current = new google.maps.InfoWindow();
+
       setIsLoading(false);
     } catch (err) {
       console.error('Map initialization error:', err);
-      setError('Failed to initialize map. Please refresh the page.');
+      setError(translate('fcErrorNoGoogleMaps'));
       setIsLoading(false);
     }
-  };
+  }, [translate]);
 
-  // Change map style
-  const changeMapStyle = (style: 'standard' | 'satellite') => {
-    setMapStyle(style);
-    if (map.current) {
-      // Remove old layer and add new one
-      map.current.eachLayer((layer) => {
-        if (layer instanceof L.TileLayer) {
-          map.current!.removeLayer(layer);
+  // Get user location and initialize
+  useEffect(() => {
+    const initMap = async () => {
+      try {
+        await loadGoogleMapsScript();
+
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              const userLoc = {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude,
+              };
+              setCurrentLocation(userLoc);
+              initializeMap(userLoc);
+            },
+            (error) => {
+              console.warn('Geolocation error:', error);
+              setError(translate('fcErrorLocation'));
+              initializeMap(MAP_CONFIG.defaultLocation);
+            }
+          );
+        } else {
+          initializeMap(MAP_CONFIG.defaultLocation);
         }
+      } catch (err) {
+        console.error('Failed to load map:', err);
+        setError(translate('fcErrorNoGoogleMaps'));
+        setIsLoading(false);
+      }
+    };
+
+    initMap();
+  }, [loadGoogleMapsScript, initializeMap, translate]);
+
+  // Search for places
+  const searchPlaces = useCallback((query: string, categoryId?: string) => {
+    if (!googleMapRef.current || !window.google?.maps) {
+      setError(translate('fcErrorNoGoogleMaps'));
+      return;
+    }
+
+    setIsSearching(true);
+    setError(null);
+    setResults([]);
+    clearMarkers();
+    clearRoute();
+
+    const service = new google.maps.places.PlacesService(googleMapRef.current);
+
+    const request: google.maps.places.TextSearchRequest = {
+      query: query,
+      location: currentLocation,
+      radius: MAP_CONFIG.searchRadius,
+      language: language === 'kn' ? 'kn' : 'en',
+      region: 'IN',
+    };
+
+    service.textSearch(request, (results, status) => {
+      setIsSearching(false);
+
+      if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+        setResults(results as PlaceResult[]);
+        displayMarkers(results as PlaceResult[], categoryId);
+      } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+        const categoryName = categoryId ? translate(`fcCategory${categoryId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('')}`) : query;
+        setError(translate('fcNoResults', { serviceName: categoryName }));
+      } else {
+        setError(`${translate('error')}: ${status}`);
+      }
+    });
+  }, [googleMapRef, currentLocation, language, translate]);
+
+  // Display markers
+  const displayMarkers = (places: PlaceResult[], categoryId?: string) => {
+    if (!googleMapRef.current) return;
+
+    const bounds = new google.maps.LatLngBounds();
+    bounds.extend(currentLocation);
+
+    const category = searchCategories.find(c => c.id === categoryId);
+    const icon = category?.icon || '📍';
+
+    places.forEach((place) => {
+      if (!place.geometry?.location) return;
+
+      const marker = new google.maps.Marker({
+        position: place.geometry.location,
+        map: googleMapRef.current,
+        title: place.name,
+        animation: google.maps.Animation.DROP,
+        label: {
+          text: icon,
+          fontSize: '18px',
+        },
       });
 
-      const tileUrl = style === 'satellite' 
-        ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-        : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-      
-      const attribution = style === 'satellite'
-        ? 'Tiles &copy; Esri'
-        : '© OpenStreetMap contributors';
+      marker.addListener('click', () => {
+        showPlaceInfo(place, marker);
+      });
 
-      L.tileLayer(tileUrl, {
-        attribution: attribution,
-        maxZoom: 19,
-      }).addTo(map.current);
+      markersRef.current.push(marker);
+      bounds.extend(place.geometry.location);
+    });
 
-      // Re-add user marker
-      if (userMarkerRef.current) {
-        userMarkerRef.current.addTo(map.current);
-      }
-
-      // Re-add search markers
-      markersRef.current.forEach(marker => marker.addTo(map.current!));
+    if (places.length > 0) {
+      googleMapRef.current.fitBounds(bounds);
     }
   };
 
-  const clearMarkers = () => {
-    markersRef.current.forEach(marker => marker.remove());
-    markersRef.current = [];
+  // Show place info
+  const showPlaceInfo = (place: PlaceResult, marker: google.maps.Marker) => {
+    if (!infoWindowRef.current) return;
+
+    const rating = place.rating
+      ? `⭐ ${place.rating.toFixed(1)} (${place.user_ratings_total || 0} ${translate('reviews')})`
+      : `${translate('rating')}: ${translate('notAvailable')}`;
+
+    const openStatus = place.opening_hours?.open_now !== undefined
+      ? place.opening_hours.open_now
+        ? '🟢 Open Now'
+        : '🔴 Closed'
+      : '';
+
+    const content = `
+      <div style="padding: 12px; max-width: 300px; font-family: system-ui;">
+        <h3 style="margin: 0 0 8px 0; font-size: 16px; font-weight: bold; color: #059669;">${place.name}</h3>
+        <p style="margin: 4px 0; font-size: 13px; color: #666;">${place.formatted_address || translate('addressNotAvailable')}</p>
+        <p style="margin: 8px 0 4px 0; font-size: 13px;">${rating}</p>
+        ${openStatus ? `<p style="margin: 4px 0; font-size: 13px;">${openStatus}</p>` : ''}
+        <button 
+          onclick="window.getDirectionsToPlace('${place.place_id}')"
+          style="
+            margin-top: 12px;
+            padding: 8px 16px;
+            background: #10B981;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            width: 100%;
+          "
+          onmouseover="this.style.background='#059669'"
+          onmouseout="this.style.background='#10B981'"
+        >
+          🗺️ ${translate('fcGetDirections')}
+        </button>
+      </div>
+    `;
+
+    infoWindowRef.current.setContent(content);
+    infoWindowRef.current.open(googleMapRef.current, marker);
   };
 
-  const performSearch = async (query: string, categoryName: string) => {
-    if (!map.current) return;
+  // Get directions
+  const getDirections = useCallback((placeId: string) => {
+    const place = results.find(p => p.place_id === placeId);
+    if (!place?.geometry?.location || !directionsRendererRef.current) return;
 
-    setLoadingSearch(true);
-    setError(null);
-    clearMarkers();
-    setResults([]);
+    const directionsService = new google.maps.DirectionsService();
 
-    try {
-      // Use Overpass API for better POI search (FREE OpenStreetMap data!)
-      // This searches for actual places/amenities in the area
-      const radius = 10000; // 10km radius
-      const overpassQuery = `
-        [out:json][timeout:25];
-        (
-          node["shop"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
-          node["amenity"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
-          node["name"~"${query}",i](around:${radius},${currentLocation.lat},${currentLocation.lng});
-          way["shop"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
-          way["amenity"="${query}"](around:${radius},${currentLocation.lat},${currentLocation.lng});
-        );
-        out center;
-      `;
+    directionsService.route(
+      {
+        origin: currentLocation,
+        destination: place.geometry.location,
+        travelMode: google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === google.maps.DirectionsStatus.OK && result) {
+          directionsRendererRef.current?.setDirections(result);
 
-      const overpassUrl = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
-      
-      let response = await fetch(overpassUrl);
-      let data = await response.json();
-
-      // If Overpass fails or returns no results, fallback to Nominatim
-      if (!data.elements || data.elements.length === 0) {
-        console.log('Overpass found nothing, trying Nominatim...');
-        const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&bounded=1&viewbox=${currentLocation.lng-0.5},${currentLocation.lat-0.5},${currentLocation.lng+0.5},${currentLocation.lat+0.5}&limit=20`;
-        
-        response = await fetch(nominatimUrl, {
-          headers: {
-            'User-Agent': 'PlantCareAI/1.0'
-          }
-        });
-        
-        data = await response.json();
-        
-        // Convert Nominatim format to Overpass-like format
-        if (data && data.length > 0) {
-          data = {
-            elements: data.map((place: any) => ({
-              type: 'node',
-              id: place.place_id,
-              lat: parseFloat(place.lat),
-              lon: parseFloat(place.lon),
-              tags: {
-                name: place.display_name.split(',')[0],
-                full_address: place.display_name
-              }
-            }))
-          };
-        }
-      }
-
-      if (data.elements && data.elements.length > 0) {
-        const searchResults: SearchResult[] = data.elements
-          .filter((element: any) => {
-            const lat = element.lat || (element.center && element.center.lat);
-            const lon = element.lon || (element.center && element.center.lon);
-            if (!lat || !lon) return false;
-            
-            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, lat, lon);
-            return distance <= 50; // Within 50km
-          })
-          .map((element: any) => {
-            const lat = element.lat || (element.center && element.center.lat);
-            const lon = element.lon || (element.center && element.center.lon);
-            const distance = calculateDistance(currentLocation.lat, currentLocation.lng, lat, lon);
-            
-            const name = element.tags?.name || element.tags?.full_address?.split(',')[0] || `${categoryName} Location`;
-            const address = element.tags?.full_address || 
-                          [element.tags?.['addr:street'], element.tags?.['addr:city']].filter(Boolean).join(', ') ||
-                          `Lat: ${lat.toFixed(4)}, Lon: ${lon.toFixed(4)}`;
-            
-            return {
-              name: name,
-              address: address,
-              coordinates: [lon, lat] as [number, number],
-              distance: `${distance.toFixed(2)} km`,
-              category: categoryName
-            };
-          })
-          .sort((a: SearchResult, b: SearchResult) => parseFloat(a.distance!) - parseFloat(b.distance!))
-          .slice(0, 15); // Top 15 closest
-
-        if (searchResults.length === 0) {
-          setError(`No ${categoryName} found within 50km. Try searching in a bigger city or different area.`);
-        } else {
-          setResults(searchResults);
-          
-          // Add markers
-          searchResults.forEach((result, index) => {
-            const customIcon = L.divIcon({
-              className: 'custom-marker',
-              html: `<div style="background-color: #10b981; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3); cursor: pointer;">${index + 1}</div>`,
-              iconSize: [30, 30],
-              iconAnchor: [15, 15],
+          const route = result.routes[0];
+          if (route?.legs[0]) {
+            setRouteInfo({
+              distance: route.legs[0].distance?.text || 'N/A',
+              duration: route.legs[0].duration?.text || 'N/A',
             });
-
-            const marker = L.marker([result.coordinates[1], result.coordinates[0]], { icon: customIcon })
-              .addTo(map.current!)
-              .bindPopup(`
-                <div style="padding: 10px; min-width: 200px;">
-                  <h3 style="font-weight: bold; color: #16a34a; margin-bottom: 5px;">${result.name}</h3>
-                  <p style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">${result.address}</p>
-                  <p style="font-size: 12px; color: #2563eb; font-weight: 600;">📍 ${result.distance}</p>
-                </div>
-              `);
-
-            markersRef.current.push(marker);
-          });
-
-          // Fit bounds to show all results
-          const bounds = L.latLngBounds([
-            [currentLocation.lat, currentLocation.lng],
-            ...searchResults.map(r => [r.coordinates[1], r.coordinates[0]] as [number, number])
-          ]);
-          map.current.fitBounds(bounds, { padding: [50, 50] });
+          }
+        } else {
+          setError(translate('fcErrorRouteNotFound'));
         }
-      } else {
-        setError(`No results found for ${categoryName}. Try:\n• Using custom search with city name (e.g., "nursery Bangalore")\n• Searching in a different area\n• Trying a different category`);
       }
-    } catch (err: any) {
-      console.error('Search error:', err);
-      setError(`Search failed: ${err.message || 'Please try again'}`);
-    } finally {
-      setLoadingSearch(false);
-    }
-  };
-
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371; // Earth's radius in km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  };
-
-  const handleCategoryClick = (category: MapSearchCategory) => {
-    setSelectedCategory(category);
-    // Use the category query directly for Overpass API
-    performSearch(
-      category.textQuery,
-      translate(category.translationKey, { default: category.defaultText })
     );
+  }, [results, currentLocation, translate]);
+
+  // Expose getDirections to window for info window button
+  useEffect(() => {
+    (window as any).getDirectionsToPlace = getDirections;
+    return () => {
+      delete (window as any).getDirectionsToPlace;
+    };
+  }, [getDirections]);
+
+  // Clear markers
+  const clearMarkers = () => {
+    markersRef.current.forEach(marker => marker.setMap(null));
+    markersRef.current = [];
+    infoWindowRef.current?.close();
   };
 
+  // Clear route
+  const clearRoute = () => {
+    directionsRendererRef.current?.setDirections({ routes: [] } as any);
+    setRouteInfo(null);
+  };
+
+  // Handle category click
+  const handleCategoryClick = (categoryId: string) => {
+    setSelectedCategory(categoryId);
+    const category = searchCategories.find(c => c.id === categoryId);
+    if (category) {
+      searchPlaces(category.query, categoryId);
+    }
+  };
+
+  // Handle custom search
   const handleCustomSearch = () => {
-    if (customSearchQuery.trim()) {
-      performSearch(customSearchQuery, 'Custom Search');
+    if (!customSearch.trim()) {
+      setError(translate('fcErrorCustomSearchEmpty'));
+      return;
     }
-  };
-
-  const panToResult = (result: SearchResult) => {
-    if (map.current) {
-      map.current.flyTo([result.coordinates[1], result.coordinates[0]], 15, { duration: 1.5 });
-    }
+    setSelectedCategory(null);
+    searchPlaces(customSearch);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 via-emerald-50 to-teal-50 p-4">
-      <div className="max-w-7xl mx-auto">
-        <Card className="mb-6 bg-gradient-to-r from-green-600 via-emerald-600 to-teal-600 text-white border-none shadow-2xl">
-          <h1 className="text-3xl md:text-4xl font-bold mb-2 flex items-center gap-3">
-            <span className="text-5xl">🗺️</span>
-            {translate('fcTitle', { default: 'Farmer Connect - Find Services' })}
-          </h1>
-          <p className="text-lg opacity-90">
-            {translate('fcDescription', { default: 'Discover services near you - 100% FREE using OpenStreetMap!' })}
-          </p>
-          <p className="text-sm mt-2 bg-white/20 inline-block px-3 py-1 rounded-full">
-            ✨ No API keys • No costs • Open source mapping!
-          </p>
-        </Card>
-
-        {error && <Alert type="error" message={error} onClose={() => setError(null)} />}
-
-        {/* Map Style Selector */}
-        <Card className="mb-4">
-          <h3 className="font-semibold text-green-700 mb-3 flex items-center gap-2">
-            <span className="text-2xl">🎨</span> Map View
-          </h3>
-          <div className="flex gap-3">
-            <button
-              onClick={() => changeMapStyle('standard')}
-              className={`flex-1 px-4 py-3 rounded-xl font-semibold transition-all ${
-                mapStyle === 'standard'
-                  ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg transform scale-105'
-                  : 'bg-white text-gray-700 hover:bg-green-50 border-2 border-gray-300'
-              }`}
-            >
-              <div className="text-2xl mb-1">🗺️</div>
-              Street Map
-            </button>
-            <button
-              onClick={() => changeMapStyle('satellite')}
-              className={`flex-1 px-4 py-3 rounded-xl font-semibold transition-all ${
-                mapStyle === 'satellite'
-                  ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg transform scale-105'
-                  : 'bg-white text-gray-700 hover:bg-blue-50 border-2 border-gray-300'
-              }`}
-            >
-              <div className="text-2xl mb-1">🛰️</div>
-              Satellite View
-            </button>
-          </div>
-        </Card>
-
-        <Card className="mb-4">
-          <h3 className="font-semibold text-green-700 mb-3 text-lg">
-            {translate('fcSearchCategories', { default: 'Search Categories' })}
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            {initialSearchCategories.map(category => (
-              <button
-                key={category.id}
-                onClick={() => handleCategoryClick(category)}
-                disabled={loadingSearch}
-                className={`flex flex-col items-center p-4 rounded-xl transition-all shadow-md hover:shadow-xl ${
-                  selectedCategory?.id === category.id
-                    ? 'bg-gradient-to-br from-green-500 to-emerald-600 text-white transform scale-105'
-                    : 'bg-white hover:bg-green-50 text-gray-700'
-                }`}
-              >
-                <span className="text-3xl mb-2">{categoryIcons[category.id]}</span>
-                <span className="text-sm font-medium text-center">
-                  {translate(category.translationKey, { default: category.defaultText })}
-                </span>
-              </button>
-            ))}
-          </div>
-        </Card>
-
-        <Card className="mb-4">
-          <h3 className="font-semibold text-green-700 mb-3 flex items-center gap-2">
-            <span className="text-2xl">🔍</span>
-            {translate('fcCustomSearch', { default: 'Custom Search' })}
-          </h3>
-          <div className="flex flex-col md:flex-row gap-3">
-            <input
-              type="text"
-              value={customSearchQuery}
-              onChange={(e) => setCustomSearchQuery(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCustomSearch()}
-              placeholder={translate('fcSearchPlaceholder', { default: 'Search for any service... (e.g., hospital, market, school)' })}
-              className="flex-1 px-4 py-3 text-lg border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-4 focus:ring-green-500/50 focus:border-green-500"
-            />
-            <button
-              onClick={handleCustomSearch}
-              disabled={loadingSearch || !customSearchQuery.trim()}
-              className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed disabled:shadow-none"
-            >
-              {loadingSearch ? '🔄 Searching...' : '🔍 Search'}
-            </button>
-          </div>
-        </Card>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2">
-            <Card className="p-0 overflow-hidden shadow-2xl">
-              <div ref={mapContainer} className="w-full h-[500px] lg:h-[600px] relative">
-                {isLoading && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-green-50 to-emerald-50 z-10">
-                    <div className="text-6xl mb-4 animate-bounce">🗺️</div>
-                    <LoadingSpinner text="Loading FREE OpenStreetMap..." size="lg" />
-                    <p className="text-sm text-gray-600 mt-4">Getting your location...</p>
-                  </div>
-                )}
-              </div>
-            </Card>
-          </div>
-
-          <div className="lg:col-span-1">
-            <Card>
-              <h3 className="font-bold text-green-700 text-xl mb-4">
-                {translate('fcResults', { default: 'Search Results' })} ({results.length})
-              </h3>
-              
-              {loadingSearch && (
-                <div className="flex justify-center py-8">
-                  <LoadingSpinner text="Searching..." />
-                </div>
-              )}
-
-              {!loadingSearch && results.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  <p className="text-4xl mb-2">🔍</p>
-                  <p>{translate('fcSelectCategory', { default: 'Select a category or search to find services' })}</p>
-                </div>
-              )}
-
-              <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
-                {results.map((result, index) => (
-                  <div
-                    key={index}
-                    onClick={() => panToResult(result)}
-                    className="group p-4 bg-gradient-to-r from-white to-green-50 rounded-xl border-2 border-green-200 hover:border-green-400 hover:shadow-xl transition-all cursor-pointer transform hover:-translate-y-1"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-600 text-white rounded-full flex items-center justify-center font-bold text-lg shadow-lg group-hover:scale-110 transition-transform">
-                        {index + 1}
-                      </div>
-                      <div className="flex-1">
-                        <h4 className="font-bold text-green-700 text-lg group-hover:text-green-800">{result.name}</h4>
-                        <p className="text-sm text-gray-600 mt-1 line-clamp-2">{result.address}</p>
-                        {result.distance && (
-                          <div className="mt-2 flex items-center gap-2 flex-wrap">
-                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-bold flex items-center gap-1">
-                              <span>📍</span>
-                              {result.distance} away
-                            </span>
-                            {result.category && (
-                              <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
-                                {result.category}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-2xl opacity-0 group-hover:opacity-100 transition-opacity">
-                        🔍
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Custom CSS for scrollbar */}
-              <style>{`
-                .custom-scrollbar::-webkit-scrollbar {
-                  width: 8px;
-                }
-                .custom-scrollbar::-webkit-scrollbar-track {
-                  background: #f1f1f1;
-                  border-radius: 10px;
-                }
-                .custom-scrollbar::-webkit-scrollbar-thumb {
-                  background: #10b981;
-                  border-radius: 10px;
-                }
-                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-                  background: #059669;
-                }
-              `}</style>
-            </Card>
-          </div>
-        </div>
-
-        <Card className="mt-6 bg-gradient-to-r from-blue-50 via-cyan-50 to-teal-50 border-2 border-blue-200 shadow-xl">
-          <div className="flex items-start gap-4">
-            <span className="text-5xl">💡</span>
-            <div className="flex-1">
-              <h3 className="font-bold text-blue-700 mb-3 text-xl">
-                {translate('fcHowToUse', { default: 'How to Use Farmer Connect' })}
-              </h3>
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <h4 className="font-semibold text-blue-600 mb-2">🎯 Features:</h4>
-                  <ul className="text-sm text-gray-700 space-y-1">
-                    <li>✅ Click categories to find services instantly</li>
-                    <li>✅ Use custom search for specific places</li>
-                    <li>✅ Toggle between Street & Satellite view</li>
-                    <li>✅ Click markers or results to zoom in</li>
-                    <li>✅ See distance from your location</li>
-                  </ul>
-                </div>
-                <div>
-                  <h4 className="font-semibold text-green-600 mb-2">🌟 Why It's Great:</h4>
-                  <ul className="text-sm text-gray-700 space-y-1">
-                    <li>💰 <strong>100% FREE Forever!</strong></li>
-                    <li>🔓 No API keys or limits</li>
-                    <li>🗺️ Powered by OpenStreetMap community</li>
-                    <li>🌍 Global coverage, local data</li>
-                    <li>🚀 Fast, reliable, open source</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-        </Card>
+    <div className="container mx-auto px-4 py-8">
+      <div className="mb-6">
+        <h2 className="text-3xl font-bold text-green-700 mb-2">
+          {translate('farmerConnectTitle')}
+        </h2>
+        <p className="text-gray-600">
+          {translate('farmerConnectDescription')}
+        </p>
       </div>
+
+      {error && (
+        <Alert type="error" message={error} onClose={() => setError(null)} />
+      )}
+
+      {/* Custom Search */}
+      <Card className="mb-4">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={customSearch}
+            onChange={(e) => setCustomSearch(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleCustomSearch()}
+            placeholder={translate('fcCustomSearchPlaceholder')}
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          />
+          <button
+            onClick={handleCustomSearch}
+            disabled={isSearching || !mapLoaded}
+            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed font-semibold transition-colors"
+          >
+            {isSearching ? translate('loading') : translate('search')}
+          </button>
+        </div>
+      </Card>
+
+      {/* Category Buttons */}
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-9 gap-2 mb-4">
+        {searchCategories.map((category) => (
+          <button
+            key={category.id}
+            onClick={() => handleCategoryClick(category.id)}
+            disabled={isSearching || !mapLoaded}
+            className={`p-3 rounded-lg border-2 transition-all duration-200 ${
+              selectedCategory === category.id
+                ? 'bg-green-600 border-green-600 text-white shadow-lg scale-105'
+                : 'bg-white border-gray-300 hover:border-green-500 hover:shadow-md'
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            <div className="text-2xl mb-1">{category.icon}</div>
+            <div className="text-xs font-medium">
+              {translate(`fcCategory${category.id.split('_').map(word => 
+                word.charAt(0).toUpperCase() + word.slice(1)
+              ).join('')}`)}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Route Info */}
+      {routeInfo && (
+        <Card className="mb-4 bg-green-50 border-green-300">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex flex-wrap gap-4">
+              <span className="font-semibold text-green-800">
+                🚗 {translate('fcDistance')}: {routeInfo.distance}
+              </span>
+              <span className="font-semibold text-green-800">
+                ⏱️ {translate('fcDuration')}: {routeInfo.duration}
+              </span>
+            </div>
+            <button
+              onClick={clearRoute}
+              className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 font-semibold text-sm transition-colors"
+            >
+              {translate('fcClearRoute')}
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* Map */}
+      <div className="relative">
+        {isLoading && (
+          <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-10 rounded-lg">
+            <LoadingSpinner text={translate('fcMapInitializing')} />
+          </div>
+        )}
+        <div
+          ref={mapRef}
+          className="w-full h-[600px] rounded-lg shadow-xl border-4 border-green-200"
+        />
+      </div>
+
+      {/* Results Count */}
+      {results.length > 0 && (
+        <div className="mt-4 text-center">
+          <span className="text-gray-600">
+            {translate('fcShowingResultsFor', { 
+              serviceName: selectedCategory 
+                ? translate(`fcCategory${selectedCategory.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('')}`)
+                : customSearch 
+            })}
+          </span>
+          <span className="font-bold text-green-700 ml-2">
+            {results.length} {language === 'kn' ? 'ಫಲಿತಾಂಶಗಳು' : 'results'}
+          </span>
+        </div>
+      )}
+
+      {isSearching && (
+        <div className="mt-4 flex justify-center">
+          <LoadingSpinner text={translate('fcSearchingServices', { serviceName: '' })} />
+        </div>
+      )}
     </div>
   );
 };

@@ -2,10 +2,11 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { GEMINI_TEXT_MODEL, GEMINI_VISION_MODEL } from '../constants';
 import { PlantDiagnosis, ImagePart, EncyclopediaEntry, CropInsight, FarmingAdvice, FertPestQuantitiesAIResponse, WeatherData } from '../types';
 
+// Hardcoded Gemini API Key for school project
 const API_KEY = 'AIzaSyBaPW9f5Xpy3fh8YODCMQKQbNW99jKNjFQ';
 
 if (!API_KEY) {
-  console.error("Gemini API Key (process.env.API_KEY) is not set. AI features will not work.");
+  console.error("Gemini API Key is not set. AI features will not work.");
 }
 
 const ai = new GoogleGenAI({ apiKey: API_KEY! });
@@ -257,5 +258,39 @@ export const getFertPestQuantitiesAI = async (
       ...defaultReturn,
       error: `Error from AI: ${error instanceof Error ? error.message : String(error)}`,
     };
+  }
+};
+
+// Generic image analysis function for AR disease detection
+export const analyzeImage = async (imageBase64: string, prompt: string): Promise<string> => {
+  if (!API_KEY) return "API Key not configured.";
+  
+  try {
+    // Extract base64 data
+    const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+    const mimeType = imageBase64.includes('data:image/jpeg') ? 'image/jpeg' : 'image/png';
+    
+    const imagePart: ImagePart = {
+      inlineData: {
+        data: base64Data,
+        mimeType: mimeType
+      }
+    };
+    
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: GEMINI_VISION_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: prompt }, imagePart]
+        }
+      ]
+    });
+    
+    const text = (response as any).text || (response as any).candidates?.[0]?.content?.parts?.[0]?.text || '';
+    return text || "No response from AI";
+  } catch (error) {
+    console.error("Error analyzing image:", error);
+    throw error;
   }
 };

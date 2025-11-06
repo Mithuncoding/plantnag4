@@ -1,7 +1,7 @@
 import { ScanResult, GreenGramPost } from '../types';
 
-const SCAN_HISTORY_KEY = 'plantCareAiScanHistory';
-const GREEN_GRAM_POSTS_KEY = 'plantCareAiGreenGramPosts';
+const SCAN_HISTORY_KEY = 'growSmartScanHistory';
+const GREEN_GRAM_POSTS_KEY = 'growSmartGreenGramPosts';
 const MAX_HISTORY_ITEMS = 12;
 const MAX_POST_ITEMS = 20; // Keep a reasonable limit for posts
 
